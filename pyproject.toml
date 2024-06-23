@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gluon"
+version = "0.0.1"
+description = "Utilities for writing ML code in JAX"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "Kyle Stachowicz", email = "kstachowicz@berkeley.edu"}
+]
+keywords = ["machine learning", "jax", "numpy"]
+
+dependencies = [
+    "numpy",
+
+    "jax",
+    "jaxlib",
+    "flax",
+    "optax",
+    "orbax-checkpoint",
+
+    "tensorflow",
+
+    "absl-py",
+    "ml-collections",
+    "einops",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+]
