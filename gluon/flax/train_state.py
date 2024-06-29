@@ -7,42 +7,11 @@ import jax
 import jax.numpy as jnp
 import optax
 import orbax.checkpoint as ocp
-import json
-import importlib
 import tensorflow as tf
-
-T = TypeVar("T")
-
-
-@struct.dataclass
-class CtorSpec(Generic[T]):
-    ctor: Callable[..., T]
-    config: Dict[str, Any]
-
-    @classmethod
-    def from_name(cls, ctor_full_name: str, config: Dict[str, Any]):
-        ctor_module = importlib.import_module(
-            ".".join(ctor_full_name.split(".")[:-1])
-        )
-        ctor_name = ctor_full_name.split(".")[-1]
-        ctor = getattr(ctor_module, ctor_name)
-        return cls(ctor=ctor, config=config)
-
-    def instantiate(self) -> T:
-        return self.ctor(**self.config)
-
-    def to_json(self) -> str:
-        ctor_str = f"{self.ctor.__module__}.{self.ctor.__name__}"
-        return json.dumps({"ctor": ctor_str, "config": self.config})
-
-    @classmethod
-    def from_json(cls, json_str: str) -> "CtorSpec":
-        data = json.loads(json_str)
-        return cls.from_name(data["ctor"], data["config"])
+import time
 
 
-OptimizerSpec = CtorSpec[optax.GradientTransformation]
-ModuleSpec = CtorSpec[nn.Module]
+from gluon.flax.spec import ModuleSpec, OptimizerSpec
 
 
 @struct.dataclass
@@ -103,10 +72,18 @@ class TrainState:
             step=self.step + 1,
         )
 
+    def apply(self, variables: Dict[str, Any], method: str | Callable, *args, **kwargs) -> Any:
+        variables = self.variables | {"params": self.params} | variables
+        t0 = time.time()
+        result = jax.jit(self.module.apply, static_argnames=["method"])(variables, *args, method=method, **kwargs)
+        result = jax.block_until_ready(result)
+        print(f"Time taken: {time.time() - t0}")
+        return result
+
     def get_bound_module(self, variables: Optional[Dict[str, Any]] = None) -> Callable:
         if variables is None:
             variables = {"params": self.params, **self.variables}
-        return lambda *args, **kwargs: self.module.apply(variables, *args, **kwargs)
+        return self.module.bind(variables)
 
     @property
     def state_dict(self) -> Dict[str, Any]:
@@ -150,7 +127,6 @@ class TrainState:
     def load(
         cls,
         directory: str,
-        tx: optax.GradientTransformation,
         manager: Optional[ocp.CheckpointManager] = None,
         step: Optional[int] = None,
     ) -> "TrainState":
@@ -195,7 +171,3 @@ class TrainState:
 
     def next_rng(self) -> "TrainState":
         return self.replace(rng=jax.random.split(self.rng)[0])
-
-    @property
-    def apply(self) -> Callable:
-        return self.module.apply
