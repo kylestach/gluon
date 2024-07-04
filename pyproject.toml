@@ -33,3 +33,5 @@ dependencies = [
 test = [
     "pytest",
 ]
+
+[build-editable]
