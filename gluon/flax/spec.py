@@ -1,11 +1,13 @@
-from typing import Any, Callable, Dict, Generic, TypeVar
-from flax import struct
-import json
 import importlib
+import json
+from typing import Any, Callable, Dict, Generic, TypeVar
+
 import optax
 from flax import linen as nn
+from flax import struct
 
 T = TypeVar("T")
+
 
 @struct.dataclass
 class CtorSpec(Generic[T]):
@@ -14,9 +16,7 @@ class CtorSpec(Generic[T]):
 
     @classmethod
     def from_name(cls, ctor_full_name: str, config: Dict[str, Any]):
-        ctor_module = importlib.import_module(
-            ".".join(ctor_full_name.split(".")[:-1])
-        )
+        ctor_module = importlib.import_module(".".join(ctor_full_name.split(".")[:-1]))
         ctor_name = ctor_full_name.split(".")[-1]
         ctor = getattr(ctor_module, ctor_name)
         return cls(ctor=ctor, config=config)

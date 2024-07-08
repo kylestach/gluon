@@ -1,14 +1,15 @@
-import pytest
+import os
+import tempfile
+
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
-import flax.linen as nn
 import optax
-from flax import serialization
-import tempfile
-import os
 import orbax.checkpoint as ocp
+import pytest
+from flax import serialization
 
-from gluon.flax import TrainState, ModuleSpec
+from gluon.flax import ModuleSpec, TrainState
 
 
 class SimpleModel(nn.Module):
@@ -88,9 +89,7 @@ def test_save_and_load_with_manager(train_state, example_batch):
             assert os.path.exists(os.path.join(tmpdir, "checkpoints"))
 
             # Load the state
-            loaded_state = TrainState.load(
-                tmpdir, train_state.tx, manager=manager
-            )
+            loaded_state = TrainState.load(tmpdir, train_state.tx, manager=manager)
 
             # Check if loaded state matches the original
             assert isinstance(loaded_state, TrainState)
@@ -152,9 +151,6 @@ def test_module_spec_serialization():
     assert loaded_spec.config == spec.config
 
 
-
-
-
 def test_with_variables(example_batch):
     rng = jax.random.PRNGKey(0)
     model = TrainState.create(
@@ -166,6 +162,7 @@ def test_with_variables(example_batch):
     )
 
     assert "batch_stats" in model.variables
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

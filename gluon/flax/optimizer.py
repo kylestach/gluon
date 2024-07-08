@@ -1,15 +1,15 @@
-from typing import Dict, Any, Optional, NamedTuple
+import math
+from typing import Any, Dict, NamedTuple, Optional
 
+import chex
 import jax
 import jax.numpy as jnp
 import optax
-import chex
-
-import math
 
 
 class ScheduleFreeSGDState(NamedTuple):
     """State for the ScheduleFreeAdam optimizer."""
+
     t: chex.Array
     z: optax.Params
 
@@ -24,6 +24,7 @@ def schedule_free_sgd(
     beta: float = 0.9,
 ) -> optax.GradientTransformation:
     peak_learning_rate = learning_rate
+
     def init_fn(params: optax.Params) -> ScheduleFreeSGDState:
         return ScheduleFreeSGDState(
             t=jnp.zeros([], jnp.int32),
@@ -62,23 +63,24 @@ def schedule_free_sgd(
 
         adam_output_results = jax.tree.map(_adam_update, updates, x, y, z)
         x, y, z, y_updates = jax.tree.transpose(
-            jax.tree_structure(updates),
-            None,
-            adam_output_results
+            jax.tree_structure(updates), None, adam_output_results
         )
 
         return y_updates, ScheduleFreeSGDState(t=state.t + 1, z=z)
 
     return optax.GradientTransformation(init_fn, update_fn)
 
+
 class ScheduleFreeAdamState(NamedTuple):
     """State for the ScheduleFreeAdam optimizer."""
+
     t: chex.Array
     z: optax.Params
     nu: optax.Updates
 
     def x(self, y, beta):
         return jax.tree.map(lambda y, z: z + (y - z) / beta, y, self.z)
+
 
 def schedule_free_adam(
     learning_rate: float,
@@ -89,6 +91,7 @@ def schedule_free_adam(
     epsilon: float = 1e-8,
 ) -> optax.GradientTransformation:
     peak_learning_rate = learning_rate
+
     def init_fn(params: optax.Params) -> ScheduleFreeAdamState:
         return ScheduleFreeAdamState(
             t=jnp.zeros([], jnp.int32),
@@ -102,11 +105,13 @@ def schedule_free_adam(
 
         def _adam_update(g, x, y, z, nu):
             # Compute second-order momentum
-            nu = beta2 * nu + (1 - beta2) * g ** 2
+            nu = beta2 * nu + (1 - beta2) * g**2
             nu_hat = nu / (1 - beta2 ** (state.t + 1))
 
             # First-order update
-            z = z + learning_rate * (-g / (jnp.sqrt(nu_hat) + epsilon) - weight_decay * y)
+            z = z + learning_rate * (
+                -g / (jnp.sqrt(nu_hat) + epsilon) - weight_decay * y
+            )
 
             # Accumulated learning rate sum_{i<=t} lr(i)
             #  - t <= warmup_steps: learning_rate * t / 2
@@ -132,14 +137,13 @@ def schedule_free_adam(
 
         adam_output_results = jax.tree.map(_adam_update, updates, x, y, z, state.nu)
         x, y, z, nu, y_updates = jax.tree.transpose(
-            jax.tree_structure(updates),
-            None,
-            adam_output_results
+            jax.tree_structure(updates), None, adam_output_results
         )
 
         return y_updates, ScheduleFreeAdamState(t=state.t + 1, z=z, nu=nu)
 
     return optax.GradientTransformation(init_fn, update_fn)
+
 
 def make_optimizer(
     *,
@@ -158,15 +162,13 @@ def make_optimizer(
     @optax.inject_hyperparams
     def _make_optimizer(lr):
         if optimizer == "adam":
-            opt = optax.adam(
-                learning_rate=lr, **optimizer_kwargs
-            )
+            opt = optax.adam(learning_rate=lr, **optimizer_kwargs)
         elif optimizer == "adamw":
-            opt = optax.adamw(
-                learning_rate=lr, **optimizer_kwargs
-            )
+            opt = optax.adamw(learning_rate=lr, **optimizer_kwargs)
         elif optimizer == "schedule_free_adam":
-            assert schedule is None, f"schedule is not supported for schedule_free_adam but got {schedule}"
+            assert (
+                schedule is None
+            ), f"schedule is not supported for schedule_free_adam but got {schedule}"
             opt = schedule_free_adam(
                 learning_rate=learning_rate,
                 warmup_steps=warmup_steps,
@@ -191,7 +193,9 @@ def make_optimizer(
             init_value=0.0, end_value=learning_rate, transition_steps=warmup_steps
         )
     elif schedule in {"warmup_cosine_decay", "cosine_decay", "cosine"}:
-        assert total_steps is not None, "total_steps must be provided for warmup_cosine_decay schedule"
+        assert (
+            total_steps is not None
+        ), "total_steps must be provided for warmup_cosine_decay schedule"
         lr = optax.warmup_cosine_decay_schedule(
             init_value=0.0,
             peak_value=learning_rate,
@@ -199,8 +203,12 @@ def make_optimizer(
             decay_steps=total_steps,
         )
     elif schedule in {"warmup_exponential_decay", "exponential_decay", "exponential"}:
-        assert total_steps is not None, "total_steps must be provided for warmup_exponential_decay schedule"
-        assert final_learning_rate > 0, "final_learning_rate must be provided and positive"
+        assert (
+            total_steps is not None
+        ), "total_steps must be provided for warmup_exponential_decay schedule"
+        assert (
+            final_learning_rate > 0
+        ), "final_learning_rate must be provided and positive"
         decay_rate = math.log(final_learning_rate / learning_rate) / total_steps
         lr = optax.warmup_exponential_decay_schedule(
             init_value=0.0,

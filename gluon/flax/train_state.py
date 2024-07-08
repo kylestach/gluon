@@ -1,17 +1,17 @@
+import dataclasses
 import os
-from typing import Type, Dict, Any, Optional, Callable, Generic, TypeVar
-from flax import struct
-from flax import linen as nn
-from flax import serialization
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple
+
 import jax
 import jax.numpy as jnp
 import optax
 import orbax.checkpoint as ocp
 import tensorflow as tf
-import time
-
+from flax import linen as nn
+from flax import serialization, struct
 
 from gluon.flax.spec import ModuleSpec, OptimizerSpec
+from gluon.typing import Data, Info, Params, Variables
 
 
 @struct.dataclass
@@ -23,8 +23,8 @@ class TrainState:
     module: nn.Module = struct.field(pytree_node=False)
     tx: optax.GradientTransformation = struct.field(pytree_node=False)
 
-    params: Dict[str, Any] = struct.field(pytree_node=True)
-    variables: Dict[str, Any] = struct.field(pytree_node=True)
+    params: Params = struct.field(pytree_node=True)
+    variables: Variables = struct.field(pytree_node=True)
     opt_state: optax.OptState = struct.field(pytree_node=True)
     step: jnp.ndarray = struct.field(pytree_node=True)
     rng: jnp.ndarray = struct.field(
@@ -36,7 +36,7 @@ class TrainState:
         cls,
         module_spec: ModuleSpec,
         optimizer_spec: OptimizerSpec,
-        example_batch: Any,
+        example_batch: Data,
         rng: jnp.ndarray,
         init_kwargs: Optional[Dict[str, Any]] = None,
     ) -> "TrainState":
@@ -46,8 +46,18 @@ class TrainState:
         if init_kwargs is None:
             init_kwargs = {}
 
-        module_variables = module.init(rng, example_batch, **init_kwargs)
+        if isinstance(example_batch, dict):
+            module_variables = module.init(rng, **example_batch, **init_kwargs)
+        elif isinstance(example_batch, (list, tuple)):
+            module_variables = module.init(rng, *example_batch, **init_kwargs)
+        else:
+            module_variables = module.init(rng, example_batch, **init_kwargs)
+
         params = module_variables.pop("params")
+        assert (
+            params is Params
+        ), f"Expected params to be of type Params, got {type(params)}"
+
         optimizer_state = tx.init(params)
 
         return cls(
@@ -63,6 +73,9 @@ class TrainState:
             rng=rng,
         )
 
+    def replace(self, **updates) -> "TrainState":
+        return dataclasses.replace(self, **updates)
+
     def apply_gradients(self, grads: Any) -> "TrainState":
         updates, new_opt_state = self.tx.update(grads, self.opt_state, self.params)
         new_params = optax.apply_updates(self.params, updates)
@@ -72,12 +85,34 @@ class TrainState:
             step=self.step + 1,
         )
 
-    def apply(self, variables: Dict[str, Any], method: str | Callable, *args, **kwargs) -> Any:
-        variables = self.variables | {"params": self.params} | variables
-        t0 = time.time()
-        result = jax.jit(self.module.apply, static_argnames=["method"])(variables, *args, method=method, **kwargs)
+    def apply_loss(
+        self, loss_fn: Callable, batch: Data, has_aux: bool = False
+    ) -> Tuple["TrainState", Info] | "TrainState":
+        grad_fn = jax.grad(loss_fn, has_aux=has_aux)
+        if has_aux:
+            grads, info = grad_fn(self.params, batch)
+            return self.apply_gradients(grads=grads), info
+        else:
+            grads = grad_fn(self.params, batch)
+            return self.apply_gradients(grads=grads)
+
+    def apply(
+        self,
+        variables: Variables,
+        *args,
+        method: Optional[str | Callable] = None,
+        **kwargs,
+    ) -> Any:
+        if method is None:
+            method = self.module.__call__
+
+        variables = {
+            **self.variables,
+            "params": self.params,
+            **variables,
+        }
+        result = self.module.apply(variables, *args, method=method, **kwargs)
         result = jax.block_until_ready(result)
-        print(f"Time taken: {time.time() - t0}")
         return result
 
     def get_bound_module(self, variables: Optional[Dict[str, Any]] = None) -> Callable:
@@ -96,14 +131,19 @@ class TrainState:
         }
 
     def save(
-        self, directory: str, manager: Optional[ocp.CheckpointManager] = None, wait: bool = False
+        self,
+        directory: str,
+        manager: Optional[ocp.CheckpointManager] = None,
+        wait: bool = False,
     ) -> None:
         tf.io.gfile.makedirs(directory)
 
         # Save ModuleSpec as JSON
         with tf.io.gfile.GFile(os.path.join(directory, "module_spec.json"), "w") as f:
             f.write(self.module_spec.to_json())
-        with tf.io.gfile.GFile(os.path.join(directory, "optimizer_spec.json"), "w") as f:
+        with tf.io.gfile.GFile(
+            os.path.join(directory, "optimizer_spec.json"), "w"
+        ) as f:
             f.write(self.optimizer_spec.to_json())
 
         # Save example_batch using msgpack
@@ -119,7 +159,7 @@ class TrainState:
                 options=ocp.CheckpointManagerOptions(),
             )
 
-        manager.save(self.step, args=ocp.args.StandardSave(self.state_dict))
+        manager.save(self.step.item(), args=ocp.args.StandardSave(self.state_dict))
         if wait:
             manager.wait_until_finished()
 
@@ -133,7 +173,9 @@ class TrainState:
         # Load ModuleSpec from JSON
         with tf.io.gfile.GFile(os.path.join(directory, "module_spec.json"), "r") as f:
             module_spec = ModuleSpec.from_json(f.read())
-        with tf.io.gfile.GFile(os.path.join(directory, "optimizer_spec.json"), "r") as f:
+        with tf.io.gfile.GFile(
+            os.path.join(directory, "optimizer_spec.json"), "r"
+        ) as f:
             optimizer_spec = OptimizerSpec.from_json(f.read())
 
         # Load example_batch using msgpack

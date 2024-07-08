@@ -33,5 +33,10 @@ dependencies = [
 test = [
     "pytest",
 ]
+examples = [
+    "matplotlib",
+    "jupyter",
+    "datasets",
+]
 
 [build-editable]
