@@ -11,10 +11,10 @@ class ScheduleFreeSGDState(NamedTuple):
     """State for the ScheduleFreeAdam optimizer."""
 
     t: chex.Array
-    z: optax.Params
+    x: optax.Params
 
-    def x(self, y, beta):
-        return jax.tree.map(lambda y, z: z + (y - z) / beta, y, self.z)
+    def z(self, y, beta):
+        return jax.tree.map(lambda x, y: x + (y - x) / (1 - beta), self.x, y)
 
 
 def schedule_free_sgd(
@@ -28,7 +28,7 @@ def schedule_free_sgd(
     def init_fn(params: optax.Params) -> ScheduleFreeSGDState:
         return ScheduleFreeSGDState(
             t=jnp.zeros([], jnp.int32),
-            z=params,
+            x=params,
         )
 
     def update_fn(updates, state, params=None):
@@ -58,15 +58,15 @@ def schedule_free_sgd(
             return x, y, z, new_y - y
 
         y = params
-        z = state.z
-        x = state.x(y, beta=state.t + 1)
+        x = state.x
+        z = state.z(y, beta=state.t + 1)
 
         adam_output_results = jax.tree.map(_adam_update, updates, x, y, z)
         x, y, z, y_updates = jax.tree.transpose(
             jax.tree_structure(updates), None, adam_output_results
         )
 
-        return y_updates, ScheduleFreeSGDState(t=state.t + 1, z=z)
+        return y_updates, ScheduleFreeSGDState(t=state.t + 1, x=x)
 
     return optax.GradientTransformation(init_fn, update_fn)
 
@@ -75,19 +75,19 @@ class ScheduleFreeAdamState(NamedTuple):
     """State for the ScheduleFreeAdam optimizer."""
 
     t: chex.Array
-    z: optax.Params
+    x: optax.Params
     nu: optax.Updates
 
-    def x(self, y, beta):
-        return jax.tree.map(lambda y, z: z + (y - z) / beta, y, self.z)
+    def z(self, y, beta):
+        return jax.tree.map(lambda x, y: x + (y - x) / (1 - beta), self.x, y)
 
 
 def schedule_free_adam(
     learning_rate: float,
     warmup_steps: int = 0,
-    weight_decay: float = 1e-3,
-    beta1: float = 0.9,
-    beta2: float = 0.999,
+    weight_decay: float = 0,
+    b1: float = 0.9,
+    b2: float = 0.999,
     epsilon: float = 1e-8,
 ) -> optax.GradientTransformation:
     peak_learning_rate = learning_rate
@@ -95,7 +95,7 @@ def schedule_free_adam(
     def init_fn(params: optax.Params) -> ScheduleFreeAdamState:
         return ScheduleFreeAdamState(
             t=jnp.zeros([], jnp.int32),
-            z=params,
+            x=params,
             nu=jax.tree.map(jnp.zeros_like, params),
         )
 
@@ -105,13 +105,13 @@ def schedule_free_adam(
 
         def _adam_update(g, x, y, z, nu):
             # Compute second-order momentum
-            nu = beta2 * nu + (1 - beta2) * g**2
-            nu_hat = nu / (1 - beta2 ** (state.t + 1))
+            nu = b2 * nu + (1 - b2) * g**2
+            nu_hat = nu / (1 - b2 ** (state.t + 1))
 
             # First-order update
-            z = z + learning_rate * (
-                -g / (jnp.sqrt(nu_hat) + epsilon) - weight_decay * y
-            )
+            z = z - learning_rate * g / (jnp.sqrt(nu_hat) + epsilon)
+            if weight_decay > 0:
+                z = z - learning_rate * weight_decay * y
 
             # Accumulated learning rate sum_{i<=t} lr(i)
             #  - t <= warmup_steps: learning_rate * t / 2
@@ -127,20 +127,20 @@ def schedule_free_adam(
 
             # Average of the past updates, weighted by learning rate
             x = (1 - c) * x + c * z
-            new_y = beta1 * x + (1 - beta1) * z
+            new_y = b1 * x + (1 - b1) * z
 
             return x, y, z, nu, new_y - y
 
+        x = state.x
         y = params
-        z = state.z
-        x = state.x(y, beta=state.t + 1)
+        z = state.z(y, beta=b1)
 
         adam_output_results = jax.tree.map(_adam_update, updates, x, y, z, state.nu)
         x, y, z, nu, y_updates = jax.tree.transpose(
             jax.tree_structure(updates), None, adam_output_results
         )
 
-        return y_updates, ScheduleFreeAdamState(t=state.t + 1, z=z, nu=nu)
+        return y_updates, ScheduleFreeAdamState(t=state.t + 1, x=x, nu=nu)
 
     return optax.GradientTransformation(init_fn, update_fn)
 

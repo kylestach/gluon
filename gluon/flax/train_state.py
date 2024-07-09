@@ -54,10 +54,6 @@ class TrainState:
             module_variables = module.init(rng, example_batch, **init_kwargs)
 
         params = module_variables.pop("params")
-        assert (
-            params is Params
-        ), f"Expected params to be of type Params, got {type(params)}"
-
         optimizer_state = tx.init(params)
 
         return cls(
